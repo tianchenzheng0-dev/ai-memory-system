@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "created": "2026-03-01",
+    "description": "TCZ·AI记忆系统模块注册表，AI每次摄入新内容时参考此表判断写入位置，并在新建模块时更新此表",
+    "auto_update": true
+  },
+  "layers": {
+    "core1": {
+      "description": "极核心层，每次必读。SSH连接、待办、用户偏好、记忆导航",
+      "file": "core1.md",
+      "update_frequency": "高频，每次蒸馏可能更新"
+    },
+    "core2": {
+      "description": "次核心层，每次必读。架构决策、工作规范、配置信息",
+      "file": "core2.md",
+      "update_frequency": "中频"
+    },
+    "module": {
+      "description": "项目/主题模块层，按需加载",
+      "path": "modules/ 或各主题目录",
+      "update_frequency": "低频，项目有进展时更新"
+    },
+    "episode": {
+      "description": "情境记忆层，按日期存储当天发生的事",
+      "path": "episodes/YYYY-MM-DD.md",
+      "update_frequency": "每日"
+    },
+    "insight": {
+      "description": "洞察积累层，技术/市场/管理/人生感悟",
+      "path": "insights/",
+      "update_frequency": "不定期，有洞察时写入"
+    },
+    "trading": {
+      "description": "炒股记忆层，交易判断/操作/复盘",
+      "path": "trading/",
+      "update_frequency": "交易日"
+    },
+    "failure": {
+      "description": "失败记忆层，踩坑记录和经验教训",
+      "file": "failures.md",
+      "update_frequency": "出问题时写入"
+    },
+    "graph": {
+      "description": "关系图谱层，人物/项目/工具关系",
+      "file": "graph.md",
+      "update_frequency": "低频"
+    }
+  }
+}
