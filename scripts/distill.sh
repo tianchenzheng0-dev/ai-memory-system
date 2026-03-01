@@ -188,3 +188,20 @@ echo "[完成] 蒸馏 + 剥离检查全部完成"
 log "正在更新桌面记忆钥匙..."
 python3 ~/ai_memory/gen_memory_key.py >> "" 2>&1 && log "✅ 桌面记忆钥匙已更新" || log "⚠️  记忆钥匙更新失败（不影响蒸馏结果）"
 
+
+# ---- 自动模块合并检测（每7天运行一次）----
+MERGE_FLAG="$HOME/ai_memory/.last_merge_check"
+DAYS_SINCE=7
+if [ -f "$MERGE_FLAG" ]; then
+    LAST=$(cat "$MERGE_FLAG")
+    NOW=$(date +%s)
+    DIFF=$(( (NOW - LAST) / 86400 ))
+    DAYS_SINCE=$DIFF
+fi
+if [ "$DAYS_SINCE" -ge 7 ]; then
+    log "开始模块相似度检测（每7天一次）..."
+    python3 ~/ai_memory/merge_modules.py 2>>"$LOG_FILE" &&         log "✅ 模块合并检测完成" ||         log "⚠️  模块合并检测失败（不影响蒸馏结果）"
+    date +%s > "$MERGE_FLAG"
+else
+    log "模块合并检测：距上次检测 ${DAYS_SINCE} 天，下次检测在 $(( 7 - DAYS_SINCE )) 天后"
+fi
