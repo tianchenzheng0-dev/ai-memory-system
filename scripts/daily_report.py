@@ -11,8 +11,9 @@ import json
 import sqlite3
 import smtplib
 import subprocess
+import urllib.request
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -95,6 +96,83 @@ def get_today_buffer():
     lines = [l for l in content.splitlines() if l.strip() and not l.startswith("---")]
     # 只取最后20行
     return "\n".join(lines[-20:]) if lines else "（无内容）"
+
+
+def get_version_check():
+    """检查是否有新版本可更新"""
+    result = {"local": "unknown", "remote": None, "has_update": False, "error": None}
+    version_file = MEMORY_ROOT / "VERSION"
+    if version_file.exists():
+        result["local"] = version_file.read_text().strip()
+    try:
+        url = "https://raw.githubusercontent.com/tianchenzheng0-dev/ai-memory-system/main/VERSION"
+        req = urllib.request.Request(url, headers={"User-Agent": "ai-memory-system"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            result["remote"] = resp.read().decode().strip()
+        if result["remote"] and result["local"] != result["remote"]:
+            result["has_update"] = True
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
+
+def get_memory_health():
+    """记忆系统健康检查：蒸馏成功率、存储占用、近7天洞察"""
+    health = {}
+    # 存储占用
+    try:
+        result = subprocess.run(["du", "-sh", str(MEMORY_ROOT)],
+                                capture_output=True, text=True, timeout=5)
+        health["storage"] = result.stdout.split()[0] if result.returncode == 0 else "?"
+    except:
+        health["storage"] = "?"
+    # 蒸馏日志分析（近7天）
+    log_file = MEMORY_ROOT / "logs" / "distill.log"
+    health["distill_success"] = 0
+    health["distill_total"] = 0
+    health["distill_rate"] = "N/A"
+    health["last_distill"] = "未知"
+    if log_file.exists():
+        try:
+            lines = log_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+            cutoff = (datetime.now() - timedelta(days=7)).date()
+            for line in lines:
+                try:
+                    line_date = datetime.strptime(line[:10], "%Y-%m-%d").date()
+                    if line_date >= cutoff:
+                        health["distill_total"] += 1
+                        if any(w in line for w in ["OK", "成功", "✅"]):
+                            health["distill_success"] += 1
+                except:
+                    pass
+            if health["distill_total"] > 0:
+                rate = health["distill_success"] / health["distill_total"] * 100
+                health["distill_rate"] = f"{rate:.0f}%"
+            for line in reversed(lines):
+                if any(w in line for w in ["OK", "成功", "✅"]):
+                    health["last_distill"] = line[:19]
+                    break
+        except:
+            pass
+    # 近7天洞察摘要
+    insights_dir = MEMORY_ROOT / "insights"
+    health["recent_insights"] = []
+    if insights_dir.exists():
+        try:
+            cutoff = datetime.now() - timedelta(days=7)
+            files = sorted(insights_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
+            for f in files[:3]:
+                if datetime.fromtimestamp(f.stat().st_mtime) >= cutoff:
+                    lines = [l.strip() for l in f.read_text(encoding="utf-8", errors="ignore").splitlines()
+                             if l.strip() and not l.startswith("#") and not l.startswith("---")]
+                    if lines:
+                        health["recent_insights"].append({"file": f.stem, "preview": lines[0][:80]})
+        except:
+            pass
+    health["episodes_count"] = len(list((MEMORY_ROOT / "episodes").glob("*.md"))) if (MEMORY_ROOT / "episodes").exists() else 0
+    health["insights_count"] = len(list((MEMORY_ROOT / "insights").glob("*.md"))) if (MEMORY_ROOT / "insights").exists() else 0
+    return health
+
 
 def get_system_status():
     """获取Mac系统状态"""
@@ -179,12 +257,55 @@ def _gen_daily_praise(stats=None):
 # ─────────────────────────────────────────────
 # 邮件内容生成
 # ─────────────────────────────────────────────
-def build_html_email(stats, balances, today_buf, sys_status):
+def build_html_email(stats, balances, today_buf, sys_status, health=None, version=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # ── 每日正能量夸赞语（AI 实时生成，每天不同）──
     daily_praise = _gen_daily_praise(stats)
 
+    # ── 记忆健康检查 HTML ──
+    h = health or {}
+    distill_color = "#27ae60" if h.get("distill_rate", "N/A") not in ["N/A", "0%"] else "#e74c3c"
+    insights_html = ""
+    for ins in h.get("recent_insights", []):
+        insights_html += f'<li><b>{ins["file"]}</b>：{ins["preview"]}</li>'
+    if not insights_html:
+        insights_html = "<li>近7天暂无新洞察</li>"
+    memory_health_html = f'''
+  <div class="section">
+    <h2>🏥 记忆系统健康报告（近7天）</h2>
+    <table>
+      <tr><td>💾 存储占用</td><td><b>{h.get("storage", "?")}</b></td></tr>
+      <tr><td>📅 最近蒸馏时间</td><td>{h.get("last_distill", "未知")}</td></tr>
+      <tr><td>📊 蒸馏成功率</td><td style="color:{distill_color}"><b>{h.get("distill_rate", "N/A")}</b>（{h.get("distill_success", 0)}/{h.get("distill_total", 0)} 次）</td></tr>
+      <tr><td>📖 情境记忆文件数</td><td>{h.get("episodes_count", 0)} 个</td></tr>
+      <tr><td>💡 洞察积累文件数</td><td>{h.get("insights_count", 0)} 个</td></tr>
+    </table>
+    <div style="margin-top:10px;">
+      <b style="font-size:13px;">近7天新洞察：</b>
+      <ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.8;">{insights_html}</ul>
+    </div>
+  </div>'''
+
+    # ── 版本检查 HTML ──
+    ver = version or {"local": "unknown"}
+    if ver.get("has_update"):
+        version_html = f'''
+  <div class="section">
+    <div style="background:#fff3e0;border-left:4px solid #ff9800;padding:12px 16px;border-radius:0 8px 8px 0;">
+      <b>🆕 记忆系统有新版本可更新</b><br>
+      <span style="font-size:13px;color:#666;">当前：v{ver["local"]} &nbsp;→&nbsp; 最新：<b style="color:#e65100;">v{ver["remote"]}</b></span><br>
+      <span style="font-size:13px;color:#666;">在 Mac 终端运行以下命令一键更新（只更新脚本，不影响记忆数据）：</span><br>
+      <code style="background:#f5f5f5;padding:4px 8px;border-radius:4px;font-size:13px;">bash ~/ai_memory/update.sh</code>
+    </div>
+  </div>'''
+    else:
+        version_html = f'''
+  <div class="section">
+    <div style="background:#e8f5e9;border-left:4px solid #4caf50;padding:10px 16px;border-radius:0 8px 8px 0;font-size:13px;">
+      ✅ 记忆系统已是最新版本 <b>v{ver.get("local", "unknown")}</b>
+    </div>
+  </div>'''
 
     # 待办列表
     todos_html = ""
@@ -327,11 +448,12 @@ def build_html_email(stats, balances, today_buf, sys_status):
     </table>
   </div>
 
-  <!-- 每日正能量 -->
-  <div class="section" style="background:linear-gradient(135deg,#667eea,#764ba2);border-radius:8px;padding:20px;margin:16px 0;">
-    <h2 style="color:#fff;margin:0 0 10px;font-size:15px;">✨ 今日专属鼓励</h2>
-    <p style="color:#fff;margin:0;font-size:14px;line-height:1.7;opacity:0.95;">{daily_praise}</p>
-  </div>
+  <!-- 记忆健康报告 -->
+  {memory_health_html}
+
+  <!-- 版本检查 -->
+  {version_html}
+
   <!-- 每日正能量 -->
   <div class="section" style="background:linear-gradient(135deg,#667eea,#764ba2);border-radius:8px;padding:20px;margin:16px 0;">
     <h2 style="color:#fff;margin:0 0 10px;font-size:15px;">✨ 今日专属鼓励</h2>
@@ -418,7 +540,16 @@ def main():
     if not action_needed:
         subject = f"✅ AI 系统日报 {today_str} {weekday} | 一切正常"
 
-    html = build_html_email(stats, balances, today_buf, sys_status)
+    version    = get_version_check()
+    health     = get_memory_health()
+    html = build_html_email(stats, balances, today_buf, sys_status, health=health, version=version)
+
+    # 如果有新版本，在邮件标题中提示
+    if version.get("has_update"):
+        if "一切正常" in subject:
+            subject = subject.replace("一切正常", f"有新版本 v{version['remote']} 可更新")
+        elif "需要你操作" in subject:
+            subject = subject + f" | 🆕 v{version['remote']} 可更新" 
     # 附上最新记忆钥匙文件
     key_file = Path.home() / "Desktop" / "TCZ·AI记忆钥匙_最新.md"
     attachments = [key_file] if key_file.exists() else []
